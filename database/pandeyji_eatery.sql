@@ -111,8 +111,6 @@ CREATE DEFINER=`root`@`localhost` FUNCTION `get_price_for_item`(p_item_name VARC
     DETERMINISTIC
 BEGIN
     DECLARE v_price DECIMAL(10, 2);
-    
-    -- Check if the item_name exists in the food_items table
     IF (SELECT COUNT(*) FROM food_items WHERE name = p_item_name) > 0 THEN
         -- Retrieve the price for the item
         SELECT price INTO v_price
@@ -144,10 +142,8 @@ CREATE DEFINER=`root`@`localhost` FUNCTION `get_total_order_price`(p_order_id IN
     DETERMINISTIC
 BEGIN
     DECLARE v_total_price DECIMAL(10, 2);
-    
-    -- Check if the order_id exists in the orders table
+  
     IF (SELECT COUNT(*) FROM orders WHERE order_id = p_order_id) > 0 THEN
-        -- Calculate the total price
         SELECT SUM(total_price) INTO v_total_price
         FROM orders
         WHERE order_id = p_order_id;
@@ -182,15 +178,9 @@ BEGIN
     DECLARE v_item_id INT;
     DECLARE v_price DECIMAL(10, 2);
     DECLARE v_total_price DECIMAL(10, 2);
-
-    -- Get the item_id and price for the food item
     SET v_item_id = (SELECT item_id FROM food_items WHERE name = p_food_item);
     SET v_price = (SELECT get_price_for_item(p_food_item));
-
-    -- Calculate the total price for the order item
     SET v_total_price = v_price * p_quantity;
-
-    -- Insert the order item into the orders table
     INSERT INTO orders (order_id, item_id, quantity, total_price)
     VALUES (p_order_id, v_item_id, p_quantity, v_total_price);
 END ;;
@@ -200,7 +190,6 @@ DELIMITER ;
 /*!50003 SET character_set_results = @saved_cs_results */ ;
 /*!50003 SET collation_connection  = @saved_col_connection */ ;
 /*!40103 SET TIME_ZONE=@OLD_TIME_ZONE */;
-
 /*!40101 SET SQL_MODE=@OLD_SQL_MODE */;
 /*!40014 SET FOREIGN_KEY_CHECKS=@OLD_FOREIGN_KEY_CHECKS */;
 /*!40014 SET UNIQUE_CHECKS=@OLD_UNIQUE_CHECKS */;
