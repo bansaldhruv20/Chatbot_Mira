@@ -1,4 +1,3 @@
-
 import re
 
 def get_str_from_food_dict(food_dict: dict):
