@@ -1,47 +1,80 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-    <link rel="stylesheet" type="text/css" href="styles.css">
-    <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;700&display=swap" rel="stylesheet">
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+
+    <title>Mira · Food Ordering</title>
+
+    <link rel="stylesheet" href="/static/styles.css">
+    <script src="/static/app.js" defer></script>
 </head>
+
 <body>
-	<div class="container">
     <header>
-        <nav>
-            <a href="#home">HOME</a> |
-            <a href="#menu">MENU</a> |
-            <a href="#location">LOCATION</a> |
-            <a href="#aboutus">ABOUT US</a> |
-            <a href="#contactus">CONTACT US</a>
-        </nav>
+        <h1>Mira</h1>
+        <p>Food ordering &amp; order tracking</p>
     </header>
 
-    <section id="home">
-		<img src="banner.jpg" >
-        <!-- Add images here -->
-    </section>
+    <main>
+        <section>
+            <h2>Our Menu</h2>
+            <p>Prices use the original project's demo units.</p>
 
-    <section id="menu">
-        <h2>Our Menu</h2>
-        <div class="grid-container">
-        <img src="menu1.jpg" alt="Menu item 1">
-        <img src="menu2.jpg" alt="Menu item 2">
-        <img src="menu3.jpg" alt="Menu item 3">
-    </div>
-    </section>
+            <div id="menu" class="menu"></div>
+        </section>
 
-    <section id="location">
-        <h2>Location</h2>
-        <p>38 Patli Gali, Mumbai</p>
-    </section>
+        <section>
+            <h2>Your Conversation</h2>
 
-    <section id="contactus">
-        <h2>Contact Us</h2>
-        <p>Got questions? Want to place an order? Call us at +91791234567 or email us at info@atliqfastfood.com</p>
-    </section>
+            <p>
+                This local demo uses menu controls.
+                The Dialogflow webhook uses the same ordering service.
+            </p>
 
-	
- <iframe class="chat-bot" width="350" height="430" allow="microphone;" src="https://console.dialogflow.com/api-client/demo/embedded/26e44813-1fb1-492f-a8b8-6f745839704e"></iframe>
-	</div>
+            <div
+                id="messages"
+                role="log"
+                aria-live="polite"
+            ></div>
+
+            <div class="controls">
+                <button id="cart" type="button">
+                    View cart
+                </button>
+
+                <button id="confirm" type="button">
+                    Confirm order
+                </button>
+
+                <button id="new" type="button">
+                    New order
+                </button>
+            </div>
+
+            <form id="tracking">
+                <label for="order-id">Track order ID</label>
+
+                <input
+                    id="order-id"
+                    type="number"
+                    min="1"
+                    step="1"
+                    required
+                >
+
+                <button type="submit">
+                    Track order
+                </button>
+            </form>
+
+            <p id="status" role="status"></p>
+        </section>
+    </main>
+
+    <footer>
+        Demo: add items, remove an item, confirm,
+        then track the returned order ID.
+    </footer>
 </body>
 </html>
