@@ -1,142 +1,284 @@
-from fastapi import FastAPI
-from fastapi import Request
-from fastapi.responses import JSONResponse
-import dp_helper
-import generic_helper
+import logging
+import os
+import secrets
+from contextlib import asynccontextmanager
+from pathlib import Path
+from typing import Any, Literal
 
-app = FastAPI()
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel, Field
+from sqlalchemy import text
+from sqlalchemy.exc import SQLAlchemyError
 
-inprogress_orders = {}
-
-@app.post("/")
-async def handle_request(request: Request):
-    # Retrieving the JSON data from the request
-    payload = await request.json()
-
-    intent = payload['queryResult']['intent']['displayName']
-    parameters = payload['queryResult']['parameters']
-    output_contexts = payload['queryResult']['outputContexts']
-    session_id = generic_helper.extract_session_id(output_contexts[0]["name"])
-
-    intent_handler_dict = {
-        'order.add - context: ongoing-order': add_to_order,
-        'order.remove - context: ongoing-order': remove_from_order,
-        'order.complete - context: ongoing-order': complete_order,
-        'track.order - context: ongoing-tracking': track_order
-    }
-
-    return intent_handler_dict[intent](parameters, session_id)
+try:
+    from . import dp_helper as db
+    from . import generic_helper as helper
+except ImportError:
+    # Support running from inside the backend directory too.
+    import dp_helper as db
+    import generic_helper as helper
 
 
-def save_to_db(order: dict):
-    next_order_id = dp_helper.get_next_order_id()
+@asynccontextmanager
+async def lifespan(app):
+    db.initialize()
+    yield
 
-    # Inserting individual items along with quantity in orders table
-    for food_item, quantity in order.items():
-        rcode = dp_helper.insert_order_item(
-            food_item,
-            quantity,
-            next_order_id
+
+app = FastAPI(
+    title="Mira food ordering prototype",
+    lifespan=lifespan,
+)
+
+frontend = Path(__file__).resolve().parents[1] / "frontend"
+
+
+class Action(BaseModel):
+    session: str = Field(
+        min_length=1,
+        max_length=255,
+        pattern=r"^[A-Za-z0-9_-]+$",
+    )
+    action: Literal[
+        "new",
+        "add",
+        "remove",
+        "cart",
+        "complete",
+        "track",
+    ]
+    items: list[str] = Field(
+        default_factory=list,
+        max_length=30,
+    )
+    quantities: list[Any] = Field(
+        default_factory=list,
+        max_length=30,
+    )
+    order_id: Any = None
+
+
+def perform(action: Action):
+    if action.action == "track":
+        result = db.track(action.order_id)
+
+        message = (
+            f"Order #{result['order_id']} is "
+            f"{result['status']}. Total: {result['total']}."
         )
 
-        if rcode == -1:
-            return -1
-            
-    dp_helper.insert_order_tracking(next_order_id, "in progress")
-    return next_order_id
-
-
-def complete_order(parameters: dict, session_id: str):
-    if session_id not in inprogress_orders:
-        fulfillment_text = "I'm having a trouble finding your order. Sorry! Can you place a new order please?"
     else:
-        order = inprogress_orders[session_id]
-        order_id = save_to_db(order)
-        if order_id == -1:
-            fulfillment_text = "Sorry, I couldn't process your order due to a backend error. " \
-                               "Please place a new order again"
+        result = db.cart_action(
+            action.session,
+            action.action,
+            action.items,
+            action.quantities,
+        )
+
+        if action.action == "complete":
+            message = (
+                "Order placed! "
+                f"Your order ID is #{result['order_id']}. "
+                f"Total: {result['total']}, payable on delivery."
+            )
         else:
-            order_total = db_helper.get_total_order_price(order_id)
+            cart_text = helper.get_str_from_food_dict(
+                result["items"]
+            )
 
-            fulfillment_text = f"Awesome. We have placed your order. " \
-                               f"Here is your order id # {order_id}. " \
-                               f"Your order total is {order_total} which you can pay at the time of delivery!"
+            message = (
+                f"Your cart: {cart_text}. "
+                "Add items or confirm your order."
+            )
 
-        del inprogress_orders[session_id]
-
-    return JSONResponse(content={
-        "fulfillmentText": fulfillment_text
-    })
-
-
-def add_to_order(parameters: dict, session_id: str):
-    food_items = parameters["food-item"]
-    quantities = parameters["number"]
-
-    if len(food_items) != len(quantities):
-        fulfillment_text = "Sorry I didn't understand. Can you please specify food items and quantities clearly?"
-    else:
-        new_food_dict = dict(zip(food_items, quantities))
-
-        if session_id in inprogress_orders:
-            current_food_dict = inprogress_orders[session_id]
-            current_food_dict.update(new_food_dict)
-            inprogress_orders[session_id] = current_food_dict
-        else:
-            inprogress_orders[session_id] = new_food_dict
-
-        order_str = generic_helper.get_str_from_food_dict(inprogress_orders[session_id])
-        fulfillment_text = f"So far you have: {order_str}. Do you need anything else?"
-
-    return JSONResponse(content={
-        "fulfillmentText": fulfillment_text
-    })
+    return {
+        **result,
+        "fulfillmentText": message,
+    }
 
 
-def remove_from_order(parameters: dict, session_id: str):
-    if session_id not in inprogress_orders:
-        return JSONResponse(content={
-            "fulfillmentText": "I'm having a trouble finding your order. Sorry! Can you place a new order please?"
-        })
-
-    food_items = parameters["food-item"]
-    current_order = inprogress_orders[session_id]
-
-    removed_items = []
-    no_such_items = []
-
-    for item in food_items:
-        if item not in current_order:
-            no_such_items.append(item)
-        else:
-            removed_items.append(item)
-            del current_order[item]
-
-    if len(removed_items) > 0:
-        fulfillment_text = f'Removed {",".join(removed_items)} from your order!'
-
-    if len(no_such_items) > 0:
-        fulfillment_text = f' Your current order does not have {",".join(no_such_items)}'
-
-    if len(current_order.keys()) == 0:
-        fulfillment_text += " Your order is empty!"
-    else:
-        order_str = generic_helper.get_str_from_food_dict(current_order)
-        fulfillment_text += f" Here is what is left in your order: {order_str}"
-
-    return JSONResponse(content={
-        "fulfillmentText": fulfillment_text
-    })
+def audit(source, action_name, success):
+    try:
+        db.record_interaction(
+            source,
+            action_name,
+            success,
+        )
+    except SQLAlchemyError:
+        # Logging failure must not turn a saved order into an error.
+        logging.exception("Could not record interaction")
 
 
-def track_order(parameters: dict, session_id: str):
-    order_id = int(parameters['order_id'])
-    order_status = db_helper.get_order_status(order_id)
-    if order_status:
-        fulfillment_text = f"The order status for order id: {order_id} is: {order_status}"
-    else:
-        fulfillment_text = f"No order found with order id: {order_id}"
+def execute(payload, source):
+    try:
+        result = perform(payload)
+        audit(source, payload.action, True)
+        return result
 
-    return JSONResponse(content={
-        "fulfillmentText": fulfillment_text
-    })
+    except ValueError as error:
+        audit(source, payload.action, False)
+        raise HTTPException(
+            status_code=400,
+            detail=str(error),
+        ) from error
+
+    except SQLAlchemyError:
+        logging.exception("Database operation failed")
+        raise HTTPException(
+            status_code=503,
+            detail="Database unavailable. Please retry.",
+        ) from None
+
+
+@app.get("/health")
+def health():
+    with db.engine.connect() as connection:
+        connection.execute(text("SELECT 1"))
+
+    return {"status": "ok"}
+
+
+@app.get("/api/menu")
+def menu():
+    return db.menu()
+
+
+@app.post("/api/action")
+def action(payload: Action):
+    return execute(payload, "local_controls")
+
+
+# Accept the corrected agent names and the original export's names.
+INTENTS = {
+    "new.order": "new",
+    "order.add - context: ongoing-order": "add",
+    "order.add - context: ongoing": "add",
+    "order.remove - context: ongoing-order": "remove",
+    "order.remove - context: ongoing": "remove",
+    "order.complete - context: ongoing-order": "complete",
+    "order.complete - context: ongoing": "complete",
+    "track.order - context: ongoing-tracking": "track",
+    "track.order - context:on-goingtracking": "track",
+}
+
+
+def as_list(value):
+    if isinstance(value, list):
+        return value
+
+    if value is None:
+        return []
+
+    return [value]
+
+
+@app.post("/")
+@app.post("/webhook")
+async def webhook(request: Request):
+    token = os.getenv("WEBHOOK_TOKEN")
+
+    if token and not secrets.compare_digest(
+        request.headers.get("X-Webhook-Token", ""),
+        token,
+    ):
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid webhook token",
+        )
+
+    try:
+        payload = await request.json()
+
+        query = payload["queryResult"]
+        intent = query["intent"]["displayName"]
+
+        if intent not in INTENTS:
+            return {
+                "fulfillmentText": (
+                    "Please start a new order "
+                    "or ask to track an order."
+                )
+            }
+
+        parameters = query.get("parameters") or {}
+
+        session = helper.extract_session_id(
+            payload.get("session", "")
+        )
+
+        # Older payloads may identify the session through a context.
+        if not session:
+            contexts = query.get("outputContexts") or []
+
+            session = (
+                helper.extract_session_id(
+                    contexts[0].get("name", "")
+                )
+                if contexts
+                else ""
+            )
+
+        names = next(
+            (
+                parameters[key]
+                for key in [
+                    "food-item",
+                    "Food-Items",
+                    "food-items",
+                ]
+                if key in parameters
+            ),
+            [],
+        )
+
+        result = execute(
+            Action(
+                session=session,
+                action=INTENTS[intent],
+                items=as_list(names),
+                quantities=as_list(
+                    parameters.get("number")
+                ),
+                order_id=parameters.get("order_id"),
+            ),
+            "webhook",
+        )
+
+        return {
+            "fulfillmentText": result["fulfillmentText"]
+        }
+
+    except HTTPException as error:
+        if error.status_code == 400:
+            return {
+                "fulfillmentText": error.detail
+            }
+        raise
+
+    except (
+        ValueError,
+        KeyError,
+        TypeError,
+        IndexError,
+        AttributeError,
+    ):
+        return {
+            "fulfillmentText": (
+                "Please provide a valid session, "
+                "food items and quantities, or an order ID."
+            )
+        }
+
+
+@app.get("/")
+def home():
+    return FileResponse(frontend / "home.html")
+
+
+app.mount(
+    "/static",
+    StaticFiles(directory=frontend),
+    name="static",
+)
